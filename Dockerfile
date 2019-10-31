@@ -11,18 +11,17 @@ ENV USER root
 # -------------------------------------------------------------------------------------
 
 RUN apt update
-RUN apt upgrade -y
-RUN DEBIAN_FRONTEND=noninteractive apt install -y iproute2 openssh-server openssh-client python python-pip python3 python3-dev python3-pip build-essential gfortran wget curl libfftw3-dev git libcudnn7 libcudnn7-dev wget libjemalloc-dev pkg-config zip unzip
+RUN DEBIAN_FRONTEND=noninteractive apt install -y iproute2 cmake openssh-server openssh-client python python-pip build-essential gfortran wget curl
+RUN pip install supervisor awscli
 
-RUN pip2 install supervisor awscli
-
+RUN mkdir -p /var/run/sshd
 ENV DEBIAN_FRONTEND noninteractive
 
 ENV NOTVISIBLE "in users profile"
 
 #####################################################
 ## SSH SETUP
-RUN mkdir -p /var/run/sshd
+
 RUN sed -i 's/PermitRootLogin prohibit-password/PermitRootLogin yes/' /etc/ssh/sshd_config
 RUN sed 's@session\s*required\s*pam_loginuid.so@session optional pam_loginuid.so@g' -i /etc/pam.d/sshd
 RUN echo "export VISIBLE=now" >> /etc/profile
@@ -34,10 +33,10 @@ RUN touch ${SSHDIR}/sshd_config
 RUN ssh-keygen -t rsa -f ${SSHDIR}/ssh_host_rsa_key -N ''
 RUN cp ${SSHDIR}/ssh_host_rsa_key.pub ${SSHDIR}/authorized_keys
 RUN cp ${SSHDIR}/ssh_host_rsa_key ${SSHDIR}/id_rsa
-RUN echo "    IdentityFile ${SSHDIR}/id_rsa" >> /etc/ssh/ssh_config
-RUN echo "Host *" >> /etc/ssh/ssh_config && echo "    StrictHostKeyChecking no" >> /etc/ssh/ssh_config
+RUN echo " IdentityFile ${SSHDIR}/id_rsa" >> /etc/ssh/ssh_config
+RUN echo "Host *" >> /etc/ssh/ssh_config && echo " StrictHostKeyChecking no" >> /etc/ssh/ssh_config
 RUN chmod -R 600 ${SSHDIR}/* && \
-    chown -R ${USER}:${USER} ${SSHDIR}/
+chown -R ${USER}:${USER} ${SSHDIR}/
 # check if ssh agent is running or not, if not, run
 RUN eval `ssh-agent -s` && ssh-add ${SSHDIR}/id_rsa
 
@@ -55,42 +54,25 @@ RUN aws configure set default.s3.addressing_style path
 ## CUDA MPI
 
 RUN wget -O /tmp/openmpi.tar.gz https://download.open-mpi.org/release/open-mpi/v4.0/openmpi-4.0.0.tar.gz && \
-    tar -xvf /tmp/openmpi.tar.gz -C /tmp
+tar -xvf /tmp/openmpi.tar.gz -C /tmp
 RUN cd /tmp/openmpi* && ./configure --prefix=/opt/openmpi --with-cuda --enable-mpirun-prefix-by-default && \
-    make -j $(nproc) && make install
-RUN echo "export PATH=$PATH:/opt/openmpi/bin" >> /etc/bash.bashrc
-RUN echo "export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/opt/openmpi/lib:/usr/local/cuda/include:/usr/local/cuda/lib64:/usr/local/cuda/extras/CUPTI/lib64" >> /etc/bash.bashrc
+make -j $(nproc) && make install
+RUN echo "export PATH=$PATH:/opt/openmpi/bin" >> /etc/profile
+RUN echo "export LD_LIBRARY_PATH=$LD_LIBRARY_PATH:/opt/openmpi/lib:/usr/local/cuda/include:/usr/local/cuda/lib64" >> /etc/profile
 
 ###################################################
-## TENSORFLOW INSTALL
+## GROMACS 2018 INSTALL
 
-RUN pip3 install numpy six wheel mock
-RUN pip3 install keras_applications==1.0.6 --no-deps
-RUN pip3 install keras_preprocessing==1.0.5 --no-deps
+ENV PATH $PATH:/opt/openmpi/bin
+ENV LD_LIBRARY_PATH $LD_LIBRARY_PATH:/opt/openmpi/lib:/usr/local/cuda/include:/usr/local/cuda/lib64
+RUN wget -O /tmp/gromacs.tar.gz http://ftp.gromacs.org/pub/gromacs/gromacs-2018.4.tar.gz && \
+tar -xvf /tmp/gromacs.tar.gz -C /tmp
+RUN cd /tmp/gromacs* && mkdir build
+RUN cd /tmp/gromacs*/build && \
+cmake .. -DGMX_MPI=on -DGMX_THREAD_MPI=ON -DGMX_GPU=ON -DCUDA_TOOLKIT_ROOT_DIR=/usr/local/cuda -DGMX_BUILD_OWN_FFTW=ON -DCMAKE_INSTALL_PREFIX=/opt/gromacs && \
+make -j $(nproc) && make install
+RUN echo "source /opt/gromacs/bin/GMXRC" >> /etc/profile
 
-RUN mkdir -p /usr/lib/x86_64-linux-gnu/nccl/lib
-RUN mkdir -p /usr/lib/x86_64-linux-gnu/nccl/include
-RUN cp /usr/lib/x86_64-linux-gnu/libnccl* /usr/lib/x86_64-linux-gnu/nccl/
-RUN cp /usr/include/nccl.h /usr/lib/x86_64-linux-gnu/nccl/include
-
-RUN wget -O /tmp/bazel.sh "https://github.com/bazelbuild/bazel/releases/download/0.18.0/bazel-0.18.0-installer-linux-x86_64.sh"
-RUN chmod +x /tmp/bazel.sh
-RUN bash -c "/tmp/bazel.sh"
-RUN git clone https://github.com/tensorflow/tensorflow /root/tensorflow
-ADD conf/tensorflow_build.sh /root/
-RUN chmod +x /root/tensorflow_build.sh
-RUN /root/tensorflow_build.sh
-
-ADD conf/horovod_build.sh /root/
-RUN chmod +x /root/horovod_build.sh
-RUN /root/horovod_build.sh
-
-###################################################
-## IMAGENET DATASET
-
-RUN git clone https://github.com/aws-samples/deep-learning-models.git /root/deep-learning-models
-
- 
 ###################################################
 ## supervisor container startup
 
